@@ -69,8 +69,6 @@ yarn all     # format, knip, lint, type-check, and bundle dist/index.js with esb
 
 The bundled `dist/` directory is committed so the action can be consumed without a build step, matching the Apple-Actions convention.
 
-`.github/workflows/test.yml` notarizes real DMGs against Apple. It needs the `NOTARY_P12_BASE64` and `NOTARY_P12_PASSWORD` secrets (a Developer ID Application identity), the `APPSTORE_API_PRIVATE_KEY` secret, and the `APPSTORE_ISSUER_ID` and `APPSTORE_API_KEY_ID` variables. Without them the notary jobs are skipped.
-
 ## License
 
 MIT
