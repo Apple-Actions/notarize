@@ -1,0 +1,127 @@
+name: test
+
+run-name: Notarize against Apple
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+    branches:
+      - "**"
+
+jobs:
+  accepted:
+    name: accepted
+    runs-on: macos-latest
+    env:
+      HAS_SECRETS: ${{ secrets.NOTARY_P12_BASE64 != '' }}
+
+    steps:
+      - name: Checkout Code
+        if: env.HAS_SECRETS == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Import Developer ID certificate
+        if: env.HAS_SECRETS == 'true'
+        uses: Apple-Actions/import-codesign-certs@5142e029c445c10ffc7149d172e540235a065466 # v7.0.0
+        with:
+          p12-file-base64: ${{ secrets.NOTARY_P12_BASE64 }}
+          p12-password: ${{ secrets.NOTARY_P12_PASSWORD }}
+
+      - name: Build signed DMG
+        if: env.HAS_SECRETS == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/payload"
+          echo "notarize test ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" > "$RUNNER_TEMP/payload/README.txt"
+          hdiutil create -volname NotarizeTest -format UDZO -srcfolder "$RUNNER_TEMP/payload" "$RUNNER_TEMP/signed.dmg"
+          codesign --sign "Developer ID Application" --timestamp "$RUNNER_TEMP/signed.dmg"
+
+      - name: Notarize
+        id: notarize
+        if: env.HAS_SECRETS == 'true'
+        uses: ./
+        with:
+          path: ${{ runner.temp }}/signed.dmg
+          issuer-id: ${{ vars.APPSTORE_ISSUER_ID }}
+          api-key-id: ${{ vars.APPSTORE_API_KEY_ID }}
+          api-private-key: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+
+      - name: Assert accepted
+        if: env.HAS_SECRETS == 'true'
+        env:
+          STATUS: ${{ steps.notarize.outputs.status }}
+          SUBMISSION_ID: ${{ steps.notarize.outputs.submission-id }}
+        run: |
+          test "$STATUS" = "Accepted" || { echo "::error::Expected status Accepted, got '$STATUS'"; exit 1; }
+          test -n "$SUBMISSION_ID" || { echo "::error::Expected a submission-id"; exit 1; }
+
+  rejected:
+    name: rejected
+    runs-on: macos-latest
+    env:
+      HAS_SECRETS: ${{ secrets.NOTARY_P12_BASE64 != '' }}
+
+    steps:
+      - name: Checkout Code
+        if: env.HAS_SECRETS == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build unsigned DMG
+        if: env.HAS_SECRETS == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/payload"
+          echo "notarize test ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" > "$RUNNER_TEMP/payload/README.txt"
+          hdiutil create -volname NotarizeTest -format UDZO -srcfolder "$RUNNER_TEMP/payload" "$RUNNER_TEMP/unsigned.dmg"
+
+      - name: Notarize
+        id: notarize
+        if: env.HAS_SECRETS == 'true'
+        continue-on-error: true
+        uses: ./
+        with:
+          path: ${{ runner.temp }}/unsigned.dmg
+          issuer-id: ${{ vars.APPSTORE_ISSUER_ID }}
+          api-key-id: ${{ vars.APPSTORE_API_KEY_ID }}
+          api-private-key: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+
+      - name: Assert rejected
+        if: env.HAS_SECRETS == 'true'
+        env:
+          OUTCOME: ${{ steps.notarize.outcome }}
+          STATUS: ${{ steps.notarize.outputs.status }}
+        run: |
+          test "$OUTCOME" = "failure" || { echo "::error::Expected outcome failure, got '$OUTCOME'"; exit 1; }
+          test "$STATUS" = "Invalid" || { echo "::error::Expected status Invalid, got '$STATUS'"; exit 1; }
+
+  validate-inputs:
+    name: validate-inputs
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: package.json
+
+      - name: Reject unsupported path
+        run: |
+          set +e
+          output=$(env \
+            'INPUT_PATH=README.md' \
+            'INPUT_ISSUER-ID=dummy' \
+            'INPUT_API-KEY-ID=dummy' \
+            'INPUT_API-PRIVATE-KEY=dummy' \
+            'INPUT_STAPLE=true' \
+            node dist/index.js)
+          code=$?
+          set -e
+          # Strip the workflow-command prefix so the expected failure isn't
+          # reported as an annotation on this run.
+          echo "${output//::/: :}"
+          test "$code" -ne 0 || { echo "::error::Expected a non-zero exit code"; exit 1; }
+          echo "$output" | grep -qF '::error::`path` must end in .dmg, .pkg, .zip, .app: README.md' \
+            || { echo "::error::Expected the allowed extensions in the failure message"; exit 1; }
