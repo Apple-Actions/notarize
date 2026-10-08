@@ -17108,7 +17108,7 @@ var require_frame = __commonJS({
       }
       createFrame(opcode) {
         const frameData = this.frameData;
-        const maskKey = generateMask();
+        const maskKey2 = generateMask();
         const bodyLength = frameData?.byteLength ?? 0;
         let payloadLength = bodyLength;
         let offset = 6;
@@ -17123,10 +17123,10 @@ var require_frame = __commonJS({
         buffer2[0] = buffer2[1] = 0;
         buffer2[0] |= 128;
         buffer2[0] = (buffer2[0] & 240) + opcode;
-        buffer2[offset - 4] = maskKey[0];
-        buffer2[offset - 3] = maskKey[1];
-        buffer2[offset - 2] = maskKey[2];
-        buffer2[offset - 1] = maskKey[3];
+        buffer2[offset - 4] = maskKey2[0];
+        buffer2[offset - 3] = maskKey2[1];
+        buffer2[offset - 2] = maskKey2[2];
+        buffer2[offset - 1] = maskKey2[3];
         buffer2[1] = payloadLength;
         if (payloadLength === 126) {
           buffer2.writeUInt16BE(bodyLength, 2);
@@ -17136,7 +17136,7 @@ var require_frame = __commonJS({
         }
         buffer2[1] |= 128;
         for (let i = 0; i < bodyLength; ++i) {
-          buffer2[offset + i] = frameData[i] ^ maskKey[i & 3];
+          buffer2[offset + i] = frameData[i] ^ maskKey2[i & 3];
         }
         return buffer2;
       }
@@ -20366,6 +20366,8 @@ function group(name, fn) {
 import { existsSync as existsSync2, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename as basename3, extname as extname2, join as join3 } from "node:path";
+
+// src/notarize.ts
 var KINDS = [".dmg", ".pkg", ".zip", ".app"];
 var FINAL = /* @__PURE__ */ new Set(["Accepted", "Invalid", "Rejected"]);
 var sleep = async (ms) => new Promise((resolve2) => setTimeout(resolve2, ms));
@@ -20382,25 +20384,45 @@ async function notarytool(args) {
 ${out.stderr}`.trim() };
   }
 }
-async function notarize(file, auth, attempts, timeout) {
-  let result = {};
+function parseAttempts(value) {
+  if (!/^[1-9]\d*$/.test(value.trim())) {
+    throw new Error(`\`attempts\` must be a positive integer: ${value}`);
+  }
+  return Number(value.trim());
+}
+function maskKey(rawKey) {
+  setSecret(rawKey);
+  const key = rawKey.replace(/\\n/g, "\n");
+  for (const line of key.split("\n")) {
+    if (line.trim()) setSecret(line.trim());
+  }
+  return key;
+}
+async function submit(file, auth, attempts) {
   for (let attempt = 1; ; attempt++) {
-    const res = result.id ? await notarytool(["wait", result.id, ...auth, "--timeout", timeout]) : await notarytool([
-      "submit",
-      file,
-      ...auth,
-      "--wait",
-      "--timeout",
-      timeout
-    ]);
-    result = { ...result, ...res.json };
-    if (result.status && FINAL.has(result.status)) return result;
+    const res = await notarytool(["submit", file, ...auth]);
+    if (res.json?.id) return res.json.id;
     if (attempt >= attempts) {
       throw new Error(
-        `notarytool did not reach a final status after ${attempts} attempts: ${res.text}`
+        `notarytool submit failed after ${attempts} attempts: ${res.text}`
       );
     }
-    warning(`notarytool attempt ${attempt} did not finish; retrying`);
+    warning(`notarytool submit attempt ${attempt} failed; retrying`);
+    await sleep(3e4 * attempt);
+  }
+}
+async function waitFor(id, auth, attempts, timeout) {
+  for (let attempt = 1; ; attempt++) {
+    const res = await notarytool(["wait", id, ...auth, "--timeout", timeout]);
+    if (res.json?.status && FINAL.has(res.json.status)) {
+      return { ...res.json, id };
+    }
+    if (attempt >= attempts) {
+      throw new Error(
+        `notarytool wait ${id} did not reach a final status after ${attempts} attempts: ${res.text}`
+      );
+    }
+    warning(`notarytool wait attempt ${attempt} did not finish; retrying`);
     await sleep(3e4 * attempt);
   }
 }
@@ -20429,6 +20451,8 @@ ${out.stderr}`;
     throw new Error(`Gatekeeper rejected ${path4}: ${text.trim()}`);
   }
 }
+
+// src/main.ts
 async function run() {
   try {
     await main();
@@ -20440,11 +20464,10 @@ async function main() {
   const path4 = getInput("path", { required: true });
   const issuerId = getInput("issuer-id", { required: true });
   const keyId = getInput("api-key-id", { required: true });
-  const rawKey = getInput("api-private-key", { required: true });
+  const key = maskKey(getInput("api-private-key", { required: true }));
   const doStaple = getBooleanInput("staple");
-  const attempts = Math.max(1, Number.parseInt(getInput("attempts") || "3", 10));
+  const attempts = parseAttempts(getInput("attempts") || "3");
   const timeout = getInput("timeout") || "1h";
-  setSecret(rawKey);
   const kind = extname2(path4).toLowerCase();
   if (!KINDS.includes(kind)) {
     throw new Error(`\`path\` must end in ${KINDS.join(", ")}: ${path4}`);
@@ -20453,30 +20476,29 @@ async function main() {
   const dir = mkdtempSync(join3(tmpdir(), "notarize-"));
   try {
     const keyPath = join3(dir, `AuthKey_${keyId}.p8`);
-    writeFileSync(keyPath, rawKey.replace(/\\n/g, "\n"), { mode: 384 });
+    writeFileSync(keyPath, key, { mode: 384 });
     const auth = ["--key", keyPath, "--key-id", keyId, "--issuer", issuerId];
     let submitPath = path4;
     if (kind === ".app") {
       submitPath = join3(dir, `${basename3(path4, ".app")}.zip`);
       await exec("ditto", ["-c", "-k", "--keepParent", path4, submitPath]);
     }
-    const result = await notarize(submitPath, auth, attempts, timeout);
-    if (result.id) setOutput("submission-id", result.id);
+    const id = await submit(submitPath, auth, attempts);
+    setOutput("submission-id", id);
+    info(`Submitted for notarization (${id})`);
+    const result = await waitFor(id, auth, attempts, timeout);
     setOutput("status", result.status ?? "");
     if (result.status !== "Accepted") {
-      const id = result.id;
-      if (id) {
-        await group("notarytool log", async () => {
-          await exec("xcrun", ["notarytool", "log", id, ...auth], {
-            ignoreReturnCode: true
-          });
+      await group("notarytool log", async () => {
+        await exec("xcrun", ["notarytool", "log", id, ...auth], {
+          ignoreReturnCode: true
         });
-      }
+      });
       throw new Error(
         `Notarization ${result.status}: ${result.message ?? "see notarytool log above"}`
       );
     }
-    info(`Notarization accepted (${result.id})`);
+    info(`Notarization accepted (${id})`);
     if (doStaple && kind !== ".zip") {
       await staple(path4, attempts);
       await assess(path4, kind);
