@@ -6,6 +6,7 @@ A GitHub Action that notarizes a macOS `.dmg`, `.pkg`, `.zip`, or `.app` with `x
 - [`Apple-Actions/download-provisioning-profiles`](https://github.com/Apple-Actions/download-provisioning-profiles)
 - [`Apple-Actions/xcodebuild`](https://github.com/Apple-Actions/xcodebuild)
 - [`Apple-Actions/upload-testflight-build`](https://github.com/Apple-Actions/upload-testflight-build)
+- [`Apple-Actions/Example-macOS`](https://github.com/Apple-Actions/Example-macOS) (full workflow)
 
 The action:
 
@@ -17,18 +18,40 @@ The action:
 
 ## Usage
 
-After exporting with a Developer ID signature and building a DMG:
+After exporting with a Developer ID signature and building a DMG, pass the DMG path from the step that built it rather than a hard-coded file name with a version in it:
 
 ```yaml
 - name: Notarize DMG
   id: notarize
   uses: Apple-Actions/notarize@v1
   with:
-    path: .build/dmg/App-1.0-42.dmg
+    path: ${{ steps.dmg.outputs.path }}
     issuer-id: ${{ vars.APPSTORE_ISSUER_ID }}
     api-key-id: ${{ vars.APPSTORE_API_KEY_ID }}
     api-private-key: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
 ```
+
+### What to notarize
+
+Notarize the DMG, not the app inside it. Gatekeeper checks the ticket stapled to the container the user opens, and a DMG's ticket covers the app it contains.
+
+### Before notarizing
+
+- The app inside the DMG must use the hardened runtime (`codesign --options runtime`), which a Developer ID export from [`xcodebuild`](https://github.com/Apple-Actions/xcodebuild#macos-mac-app-store-and-developer-id-from-one-archive) applies.
+- The DMG itself must be signed with Developer ID and a secure timestamp:
+
+  ```sh
+  codesign --sign "$IDENTITY_HASH" --timestamp App.dmg
+  ```
+
+  Sign by SHA-1 hash rather than name. A renewed certificate keeps the old one's name, so signing by name fails as ambiguous while both are in the keychain. Get the hash from the [`identities` output of `import-codesign-certs`](https://github.com/Apple-Actions/import-codesign-certs#identities).
+
+### Pipeline order
+
+When the same workflow also uploads to TestFlight with [`upload-testflight-build`](https://github.com/Apple-Actions/upload-testflight-build), choose the order deliberately:
+
+- Run the DMG and notarize steps **after** the upload if a notary-service outage must not block a TestFlight upload.
+- Run them **before** the upload if re-running a failed job must never upload the same build twice.
 
 ## Inputs
 
