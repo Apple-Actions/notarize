@@ -19,7 +19,7 @@ inputs:
     required: false
     default: 'true'
   attempts:
-    description: 'Attempts for submission/wait and for stapling, covering transient network and service errors and the delay before a ticket is published.'
+    description: 'Attempts for each of submitting, waiting, and stapling, covering transient network and service errors and the delay before a ticket is published.'
     required: false
     default: '3'
   timeout:
