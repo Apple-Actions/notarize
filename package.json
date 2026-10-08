@@ -1,0 +1,47 @@
+{
+  "name": "notarize-action",
+  "version": "1.0.0",
+  "description": "GitHub Action to notarize, staple, and verify a macOS .dmg, .pkg, .zip, or .app with notarytool.",
+  "type": "module",
+  "main": "src/main.ts",
+  "engines": {
+    "node": "24"
+  },
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/index.js --banner:js=\"import{createRequire}from'node:module';const require=createRequire(import.meta.url);\"",
+    "format": "prettier --write src/",
+    "format:check": "prettier --check src/",
+    "knip": "knip",
+    "lint": "eslint",
+    "type:check": "tsc --noEmit",
+    "all": "yarn format && yarn knip && yarn lint && yarn type:check && yarn build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Apple-Actions/notarize.git"
+  },
+  "keywords": [
+    "actions",
+    "apple",
+    "macos",
+    "notarize",
+    "notarytool",
+    "stapler"
+  ],
+  "author": "Itty Bitty Apps Pty Ltd",
+  "license": "MIT",
+  "dependencies": {
+    "@actions/core": "~3.0.0",
+    "@actions/exec": "~3.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "~24.12.0",
+    "esbuild": "~0.28.0",
+    "eslint": "~9.39.0",
+    "eslint-plugin-github": "~6.0.0",
+    "knip": "~6.5.0",
+    "prettier": "~3.8.0",
+    "typescript": "~6.0.0"
+  },
+  "packageManager": "yarn@4.14.1"
+}

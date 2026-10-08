@@ -1,0 +1,39 @@
+name: 'Notarize'
+description: 'Notarize a .dmg, .pkg, .zip, or .app with notarytool using an App Store Connect API key, then staple and verify the ticket.'
+author: 'Itty Bitty Apps Pty Ltd'
+inputs:
+  path:
+    description: 'Path to the .dmg, .pkg, .zip, or .app to notarize. A .app is zipped with ditto for submission and stapled in place.'
+    required: true
+  issuer-id:
+    description: 'The App Store Connect API Key Issuer Identifier'
+    required: true
+  api-key-id:
+    description: 'The Key ID for App Store Connect API'
+    required: true
+  api-private-key:
+    description: 'The PKCS8 format Private Key for App Store Connect API'
+    required: true
+  staple:
+    description: 'Staple the ticket to `path` after acceptance and verify it with Gatekeeper. Ignored for .zip, which cannot be stapled.'
+    required: false
+    default: 'true'
+  attempts:
+    description: 'Attempts for submission/wait and for stapling, covering transient network and service errors and the delay before a ticket is published.'
+    required: false
+    default: '3'
+  timeout:
+    description: 'notarytool --timeout for each wait (for example 30m, 1h).'
+    required: false
+    default: '1h'
+outputs:
+  submission-id:
+    description: 'Notary submission ID'
+  status:
+    description: 'Final notary status: Accepted, Invalid, or Rejected'
+runs:
+  using: 'node24'
+  main: 'dist/index.js'
+branding:
+  icon: 'check-circle'
+  color: 'blue'
