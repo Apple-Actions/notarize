@@ -9,8 +9,8 @@ A GitHub Action that notarizes a macOS `.dmg`, `.pkg`, `.zip`, or `.app` with `x
 
 The action:
 
-1. Submits the artifact with `notarytool submit --wait`. A `.app` is zipped with `ditto` for submission.
-2. Retries transient failures. If a submission ID was issued but the wait was interrupted, it resumes with `notarytool wait` instead of submitting again.
+1. Submits the artifact with `notarytool submit`, retrying until it gets a submission ID. A `.app` is zipped with `ditto` for submission.
+2. Waits with `notarytool wait <id>`, retrying interrupted or timed-out waits on the same submission instead of submitting again.
 3. Prints `notarytool log` and fails if the result is not `Accepted`.
 4. Staples the ticket with `stapler staple`, retrying while Apple publishes it, then runs `stapler validate`.
 5. Checks the result with Gatekeeper (`spctl`) and fails unless it reports `source=Notarized Developer ID`.
@@ -39,7 +39,7 @@ After exporting with a Developer ID signature and building a DMG:
 | `api-key-id` | The Key ID for App Store Connect API. **Required.** | — |
 | `api-private-key` | The PKCS8 format Private Key for App Store Connect API. Real newlines and literal `\n` sequences are both accepted. **Required.** | — |
 | `staple` | Staple the ticket to `path` after acceptance and verify it with Gatekeeper. Ignored for `.zip`, which cannot be stapled. | `true` |
-| `attempts` | Attempts for submission/wait and for stapling, covering transient network and service errors and the delay before a ticket is published. | `3` |
+| `attempts` | Attempts for each of submitting, waiting, and stapling, covering transient network and service errors and the delay before a ticket is published. Must be a positive integer. | `3` |
 | `timeout` | `notarytool --timeout` for each wait (for example `30m`, `1h`). | `1h` |
 
 ## Outputs
@@ -64,7 +64,7 @@ After exporting with a Developer ID signature and building a DMG:
 
 ```sh
 yarn install
-yarn all     # format, knip, lint, type-check, and bundle dist/index.js with esbuild
+yarn all     # format, knip, lint, type-check, test, and bundle dist/index.js with esbuild
 ```
 
 The bundled `dist/` directory is committed so the action can be consumed without a build step, matching the Apple-Actions convention.
