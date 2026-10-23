@@ -1,12 +1,21 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest'
-import {getExecOutput} from '@actions/exec'
-import {setSecret} from '@actions/core'
-import {maskKey, parseAttempts, submit, waitFor} from '../src/notarize'
+import {exec, getExecOutput} from '@actions/exec'
+import {setSecret, warning} from '@actions/core'
+import {
+  assess,
+  maskKey,
+  parseAttempts,
+  staple,
+  submit,
+  waitFor
+} from '../src/notarize'
 
 vi.mock('@actions/exec', () => ({exec: vi.fn(), getExecOutput: vi.fn()}))
 vi.mock('@actions/core', () => ({setSecret: vi.fn(), warning: vi.fn()}))
 
+const execMock = vi.mocked(exec)
 const execOutput = vi.mocked(getExecOutput)
+const warningMock = vi.mocked(warning)
 const auth = ['--key', 'k.p8', '--key-id', 'KEY', '--issuer', 'ISSUER']
 
 function respond(...outputs: string[]): void {
@@ -25,7 +34,9 @@ async function settle<T>(promise: Promise<T>): Promise<T> {
 }
 
 beforeEach(() => {
+  execMock.mockReset()
   execOutput.mockReset()
+  warningMock.mockReset()
   vi.useFakeTimers()
 })
 
@@ -99,6 +110,134 @@ describe('waitFor', () => {
     )
     await vi.runAllTimersAsync()
     await result
+  })
+})
+
+describe('staple', () => {
+  it('staples and validates on the first try', async () => {
+    execMock.mockResolvedValueOnce(0).mockResolvedValueOnce(0)
+    await staple('a.dmg', 3)
+    expect(execMock).toHaveBeenCalledTimes(2)
+    expect(execMock.mock.calls[0]).toEqual([
+      'xcrun',
+      ['stapler', 'staple', 'a.dmg'],
+      {ignoreReturnCode: true}
+    ])
+    expect(execMock.mock.calls[1]).toEqual([
+      'xcrun',
+      ['stapler', 'validate', 'a.dmg']
+    ])
+  })
+
+  it('retries after a failed staple then validates', async () => {
+    execMock
+      .mockResolvedValueOnce(1)
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(0)
+    await settle(staple('a.dmg', 3))
+    expect(warningMock).toHaveBeenCalledWith(
+      'stapler attempt 1 failed; retrying'
+    )
+    expect(execMock).toHaveBeenCalledTimes(3)
+    expect(execMock.mock.calls[0][1]).toEqual(['stapler', 'staple', 'a.dmg'])
+    expect(execMock.mock.calls[1][1]).toEqual(['stapler', 'staple', 'a.dmg'])
+    expect(execMock.mock.calls[2][1]).toEqual(['stapler', 'validate', 'a.dmg'])
+  })
+
+  it('fails after its attempts are used up without validating', async () => {
+    execMock.mockResolvedValue(1)
+    const result = expect(staple('a.dmg', 2)).rejects.toThrow(
+      'stapler failed after 2 attempts'
+    )
+    await vi.runAllTimersAsync()
+    await result
+    expect(execMock).toHaveBeenCalledTimes(2)
+    for (const call of execMock.mock.calls) {
+      expect(call[1]).toEqual(['stapler', 'staple', 'a.dmg'])
+    }
+  })
+})
+
+describe('assess', () => {
+  it('uses open assessment for .dmg', async () => {
+    execOutput.mockResolvedValueOnce({
+      exitCode: 0,
+      stdout: 'source=Notarized Developer ID',
+      stderr: ''
+    })
+    await assess('a.dmg', '.dmg')
+    expect(execOutput).toHaveBeenCalledWith(
+      'spctl',
+      [
+        '-a',
+        '-t',
+        'open',
+        '--context',
+        'context:primary-signature',
+        '-vv',
+        'a.dmg'
+      ],
+      {ignoreReturnCode: true}
+    )
+  })
+
+  it('uses install assessment for .pkg', async () => {
+    execOutput.mockResolvedValueOnce({
+      exitCode: 0,
+      stdout: 'source=Notarized Developer ID',
+      stderr: ''
+    })
+    await assess('a.pkg', '.pkg')
+    expect(execOutput).toHaveBeenCalledWith(
+      'spctl',
+      ['-a', '-t', 'install', '-vv', 'a.pkg'],
+      {ignoreReturnCode: true}
+    )
+  })
+
+  it('uses exec assessment for .app', async () => {
+    execOutput.mockResolvedValueOnce({
+      exitCode: 0,
+      stdout: 'source=Notarized Developer ID',
+      stderr: ''
+    })
+    await assess('a.app', '.app')
+    expect(execOutput).toHaveBeenCalledWith(
+      'spctl',
+      ['-a', '-t', 'exec', '-vv', 'a.app'],
+      {ignoreReturnCode: true}
+    )
+  })
+
+  it('accepts notarized Developer ID output', async () => {
+    execOutput.mockResolvedValueOnce({
+      exitCode: 0,
+      stdout: '',
+      stderr: 'source=Notarized Developer ID'
+    })
+    await expect(assess('a.app', '.app')).resolves.toBeUndefined()
+  })
+
+  it('rejects a non-zero exit code', async () => {
+    execOutput.mockResolvedValueOnce({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'rejected'
+    })
+    await expect(assess('a.app', '.app')).rejects.toThrow(
+      'Gatekeeper rejected a.app: rejected'
+    )
+  })
+
+  it('rejects when the notarized source is missing', async () => {
+    execOutput.mockResolvedValueOnce({
+      exitCode: 0,
+      stdout: 'source=Developer ID',
+      stderr: ''
+    })
+    await expect(assess('a.app', '.app')).rejects.toThrow(
+      'Gatekeeper rejected a.app: source=Developer ID'
+    )
   })
 })
 
