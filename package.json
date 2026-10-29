@@ -1,6 +1,6 @@
 {
   "name": "notarize-action",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "GitHub Action to notarize, staple, and verify a macOS .dmg, .pkg, .zip, or .app with notarytool.",
   "type": "module",
   "main": "src/main.ts",
